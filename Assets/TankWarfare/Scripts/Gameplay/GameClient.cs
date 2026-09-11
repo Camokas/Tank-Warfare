@@ -345,9 +345,9 @@ namespace TankWarfare.Gameplay
         private static string DefaultServerUrl()
         {
 #if UNITY_WEBGL && !UNITY_EDITOR
-            return "wss://YOUR-SERVER.example.com";
+            return "wss://tank-warfare-13tp.onrender.com";
 #else
-            return "ws://localhost:8080";
+            return "wss://tank-warfare-13tp.onrender.com";
 #endif
         }
     }
