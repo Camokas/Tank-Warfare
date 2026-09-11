@@ -4,6 +4,7 @@ using TankWarfare.Core;
 using TankWarfare.Network;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using UnityEngine.UI;
 
 namespace TankWarfare.Gameplay
 {
@@ -27,6 +28,7 @@ namespace TankWarfare.Gameplay
         private string committedMatchId = string.Empty;
         private int localPlayerId = -1;
         private TankType selectedTank = TankType.Medium;
+        private ArenaSize selectedArenaSize = ArenaSize.Medium;
         private float nextInputTime;
         private float nextPredictedShotTime;
         private bool fireQueued;
@@ -66,15 +68,16 @@ namespace TankWarfare.Gameplay
 
             BindButtons();
             SelectTank(TankType.Medium);
+            RefreshMapSizeButton();
             ShowScreen(ScreenState.Menu);
         }
 
         private void BindButtons()
         {
             ui.createButton.onClick.AddListener(() => BeginConnection("create"));
+            ui.botButton.onClick.AddListener(() => BeginConnection("bot"));
             ui.joinButton.onClick.AddListener(() => BeginConnection("join"));
             ui.statisticsButton.onClick.AddListener(OpenStatistics);
-            ui.exitButton.onClick.AddListener(Application.Quit);
             ui.cancelButton.onClick.AddListener(ReturnToMenu);
             ui.leaveLobbyButton.onClick.AddListener(ReturnToMenu);
             ui.resultMenuButton.onClick.AddListener(ReturnToMenu);
@@ -83,6 +86,7 @@ namespace TankWarfare.Gameplay
             ui.heavyButton.onClick.AddListener(() => SelectTank(TankType.Heavy));
             ui.mediumButton.onClick.AddListener(() => SelectTank(TankType.Medium));
             ui.lightButton.onClick.AddListener(() => SelectTank(TankType.Light));
+            ui.mapSizeButton.onClick.AddListener(SelectNextMapSize);
         }
 
         private void Update()
@@ -135,6 +139,18 @@ namespace TankWarfare.Gameplay
             ui.tankInfoText.text = $"Скорость {spec.MoveSpeed:0.0}   •   Урон {spec.Damage:0}   •   Скорость пули {spec.BulletSpeed:0}";
         }
 
+        private void SelectNextMapSize()
+        {
+            selectedArenaSize = (ArenaSize)(((int)selectedArenaSize + 1) % 3);
+            RefreshMapSizeButton();
+        }
+
+        private void RefreshMapSizeButton()
+        {
+            Text label = ui.mapSizeButton.GetComponentInChildren<Text>();
+            if (label != null) label.text = $"ПОЛЕ: {MapSizeName(selectedArenaSize).ToUpperInvariant()}";
+        }
+
         private void BeginConnection(string operation)
         {
             string nickname = SanitizeName(ui.nicknameInput.text);
@@ -175,7 +191,8 @@ namespace TankWarfare.Gameplay
             ui.connectionStatusText.text = "Соединение установлено";
             transport.Send(JsonUtility.ToJson(new NetworkMessage
             {
-                type = pendingOperation, room = roomCode, name = lifetime.nickname, tankType = (int)selectedTank
+                type = pendingOperation, room = roomCode, name = lifetime.nickname,
+                tankType = (int)selectedTank, mapSize = (int)selectedArenaSize
             }));
         }
 
@@ -196,6 +213,11 @@ namespace TankWarfare.Gameplay
                     localPlayerId = message.playerId;
                     roomCode = message.room;
                     committedMatchId = string.Empty;
+                    selectedArenaSize = Enum.IsDefined(typeof(ArenaSize), message.mapSize)
+                        ? (ArenaSize)message.mapSize
+                        : ArenaSize.Medium;
+                    RefreshMapSizeButton();
+                    world.ConfigureMap(selectedArenaSize);
                     world.BuildWalls(message.walls);
                     ui.roomAddressText.text = roomCode;
                     ui.gameAddressText.text = $"Адрес игры: {roomCode}";
@@ -359,6 +381,16 @@ namespace TankWarfare.Gameplay
             value = (value ?? string.Empty).Trim();
             if (value.Length > 18) value = value.Substring(0, 18);
             return string.IsNullOrEmpty(value) ? "Игрок" : value;
+        }
+
+        private static string MapSizeName(ArenaSize value)
+        {
+            return value switch
+            {
+                ArenaSize.Small => "Маленькое",
+                ArenaSize.Large => "Большое",
+                _ => "Среднее"
+            };
         }
 
         private static string DefaultServerUrl()

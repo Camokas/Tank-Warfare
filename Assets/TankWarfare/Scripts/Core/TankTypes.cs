@@ -10,6 +10,13 @@ namespace TankWarfare.Core
         Light = 2
     }
 
+    public enum ArenaSize
+    {
+        Small = 0,
+        Medium = 1,
+        Large = 2
+    }
+
     [Serializable]
     public readonly struct TankSpec
     {

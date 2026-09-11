@@ -20,10 +20,11 @@ namespace TankWarfare.Gameplay
         public Button createButton;
         public Button joinButton;
         public Button statisticsButton;
-        public Button exitButton;
         public Button heavyButton;
         public Button mediumButton;
         public Button lightButton;
+        public Button mapSizeButton;
+        public Button botButton;
         public Text tankInfoText;
         public Text menuStatusText;
 

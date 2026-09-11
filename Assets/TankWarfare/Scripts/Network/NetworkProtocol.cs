@@ -14,6 +14,7 @@ namespace TankWarfare.Network
         public string error;
         public int playerId;
         public int tankType;
+        public int mapSize = 1;
         public int seed;
         public int sequence;
         public int winner = -1;

@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using InvalidOperationException = System.InvalidOperationException;
+using TankWarfare.Core;
 using TankWarfare.Network;
 using UnityEngine;
 
@@ -8,6 +9,8 @@ namespace TankWarfare.Gameplay
     public sealed class WorldView
     {
         private readonly Transform root;
+        private readonly Transform floor;
+        private readonly Camera gameCamera;
         private readonly Dictionary<int, GameObject> walls = new Dictionary<int, GameObject>();
         private readonly Dictionary<int, BulletView> bullets = new Dictionary<int, BulletView>();
         private readonly Queue<BulletView> predictedBullets = new Queue<BulletView>();
@@ -20,7 +23,34 @@ namespace TankWarfare.Gameplay
             if (dynamicRoot == null)
                 throw new InvalidOperationException("На сцене отсутствует объект DynamicLevel.");
             root = dynamicRoot.transform;
+            GameObject floorObject = GameObject.Find("CubeFloor");
+            floor = floorObject != null ? floorObject.transform : null;
+            gameCamera = Camera.main;
             bulletMaterial = CreateMaterial(new Color(1f, 0.72f, 0.16f), true);
+        }
+
+        public void ConfigureMap(ArenaSize arenaSize)
+        {
+            float scale;
+            float cameraSize;
+            switch (arenaSize)
+            {
+                case ArenaSize.Small:
+                    scale = 0.65f;
+                    cameraSize = 9.2f;
+                    break;
+                case ArenaSize.Large:
+                    scale = 1.825f;
+                    cameraSize = 24f;
+                    break;
+                default:
+                    scale = 1f;
+                    cameraSize = 13.1f;
+                    break;
+            }
+
+            if (floor != null) floor.localScale = new Vector3(scale, 1f, scale);
+            if (gameCamera != null) gameCamera.orthographicSize = cameraSize;
         }
 
         public void BuildWalls(WallSnapshot[] snapshots)

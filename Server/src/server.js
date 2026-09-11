@@ -16,6 +16,11 @@ const tankSpecs = [
   { speed: 4.8, turn: 120, damage: 40, bullet: 12, reload: 0.70, health: 110 },
   { speed: 6.3, turn: 145, damage: 25, bullet: 16, reload: 0.45, health: 80 }
 ];
+const mapSpecs = [
+  { halfWidth: 8.25, halfDepth: 5.7, obstacleAttempts: 10 },
+  { halfWidth: 12.75, halfDepth: 8.7, obstacleAttempts: 24 },
+  { halfWidth: 23.25, halfDepth: 15.9, obstacleAttempts: 78 }
+];
 
 const rooms = new Map();
 let nextBulletId = 1;
@@ -46,17 +51,19 @@ function handleMessage(socket, raw) {
   catch { return sendError(socket, 'Некорректный JSON'); }
 
   if (!message || typeof message.type !== 'string') return;
-  if (message.type === 'create') return createRoom(socket, message);
+  if (message.type === 'create') return createRoom(socket, message, false);
+  if (message.type === 'bot') return createRoom(socket, message, true);
   if (message.type === 'join') return joinRoom(socket, message);
   if (message.type === 'input') return applyInput(socket, message);
 }
 
-function createRoom(socket, message) {
+function createRoom(socket, message, withBot) {
   if (socket.meta.room) return;
   let code;
   do { code = randomCode(); } while (rooms.has(code));
 
   const seed = crypto.randomInt(1, 0x7fffffff);
+  const mapSize = clampInteger(message.mapSize, 0, 2, 1);
   const room = {
     code,
     seed,
@@ -66,14 +73,22 @@ function createRoom(socket, message) {
     score: [0, 0],
     round: 1,
     resetAt: 0,
+    mapSize,
     players: [],
     bullets: [],
-    walls: generateLevel(seed),
+    walls: generateLevel(seed, mapSize),
+    wallsDirty: false,
     snapshotAccumulator: 0,
     lastUpdate: performance.now()
   };
   rooms.set(code, room);
   addPlayer(room, socket, message);
+  if (withBot) {
+    addBot(room);
+    room.phase = 'playing';
+    respawnPlayers(room);
+    broadcastSnapshot(room);
+  }
 }
 
 function joinRoom(socket, message) {
@@ -93,7 +108,7 @@ function addPlayer(room, socket, message) {
   const id = room.players.length;
   const tankType = clampInteger(message.tankType, 0, 2, 1);
   const spec = tankSpecs[tankType];
-  const spawn = spawnFor(id);
+  const spawn = spawnFor(id, room.mapSize);
   const player = {
     id,
     socket,
@@ -104,6 +119,7 @@ function addPlayer(room, socket, message) {
     yaw: spawn.yaw,
     health: spec.health,
     alive: true,
+    isBot: false,
     input: { move: 0, turn: 0, fire: false, sequence: 0 },
     nextShotAt: 0,
     stats: { playerId: id, shots: 0, meters: 0, walls: 0 }
@@ -113,9 +129,32 @@ function addPlayer(room, socket, message) {
   socket.meta.playerId = id;
   send(socket, {
     type: 'welcome', playerId: id, room: room.code, seed: room.seed,
-    matchId: room.matchId, walls: publicWalls(room.walls)
+    matchId: room.matchId, mapSize: room.mapSize, walls: publicWalls(room.walls)
   });
   broadcastSnapshot(room);
+}
+
+function addBot(room) {
+  const id = room.players.length;
+  const tankType = room.seed % tankSpecs.length;
+  const spec = tankSpecs[tankType];
+  const spawn = spawnFor(id, room.mapSize);
+  room.players.push({
+    id,
+    socket: null,
+    name: 'Бот',
+    tankType,
+    x: spawn.x,
+    z: spawn.z,
+    yaw: spawn.yaw,
+    health: spec.health,
+    alive: true,
+    isBot: true,
+    input: { move: 0, turn: 0, fire: false, sequence: 0 },
+    nextShotAt: 0,
+    stats: { playerId: id, shots: 0, meters: 0, walls: 0 },
+    ai: { avoidUntil: 0, avoidDirection: room.seed % 2 === 0 ? 1 : -1 }
+  });
 }
 
 function applyInput(socket, message) {
@@ -159,6 +198,10 @@ function simulateRoom(room, delta, nowSeconds) {
   }
 
   for (const player of room.players) {
+    if (player.isBot && player.alive) updateBot(room, player, nowSeconds);
+  }
+
+  for (const player of room.players) {
     if (!player.alive) continue;
     const spec = tankSpecs[player.tankType];
     player.yaw = normalizeAngle(player.yaw + player.input.turn * spec.turn * delta);
@@ -190,7 +233,9 @@ function simulateRoom(room, delta, nowSeconds) {
     bullet.x += Math.sin(radians) * bullet.speed * delta;
     bullet.z += Math.cos(radians) * bullet.speed * delta;
     bullet.life -= delta;
-    let remove = bullet.life <= 0 || Math.abs(bullet.x) > 14 || Math.abs(bullet.z) > 10;
+    const map = mapSpecs[room.mapSize];
+    let remove = bullet.life <= 0 || Math.abs(bullet.x) > map.halfWidth + 1.25 ||
+      Math.abs(bullet.z) > map.halfDepth + 1.3;
 
     if (!remove) {
       const wall = room.walls.find(value => value.health > 0 && pointInWall(bullet.x, bullet.z, value));
@@ -198,6 +243,7 @@ function simulateRoom(room, delta, nowSeconds) {
         remove = true;
         if (wall.destructible) {
           wall.health = Math.max(0, wall.health - bullet.damage);
+          room.wallsDirty = true;
           if (wall.health === 0) room.players[bullet.owner].stats.walls++;
         }
       }
@@ -234,16 +280,18 @@ function finishRound(room, scorerId, nowSeconds) {
 function respawnPlayers(room) {
   room.bullets.length = 0;
   for (const player of room.players) {
-    const spawn = spawnFor(player.id);
+    const spawn = spawnFor(player.id, room.mapSize);
     const spec = tankSpecs[player.tankType];
     Object.assign(player, { x: spawn.x, z: spawn.z, yaw: spawn.yaw, health: spec.health, alive: true });
     player.input = { move: 0, turn: 0, fire: false, sequence: player.input.sequence };
     player.nextShotAt = 0;
+    if (player.ai) player.ai.avoidUntil = 0;
   }
 }
 
 function canTankOccupy(room, moving, x, z) {
-  if (Math.abs(x) > 11.9 || Math.abs(z) > 7.9) return false;
+  const map = mapSpecs[room.mapSize];
+  if (Math.abs(x) > map.halfWidth - 0.85 || Math.abs(z) > map.halfDepth - 0.8) return false;
   for (const wall of room.walls) {
     if (wall.health <= 0) continue;
     if (circleIntersectsBox(x, z, 0.68, wall.x, wall.z, 0.675)) return false;
@@ -252,26 +300,31 @@ function canTankOccupy(room, moving, x, z) {
     squaredDistance(x, z, other.x, other.z) < 1.45 * 1.45);
 }
 
-function generateLevel(seed) {
+function generateLevel(seed, mapSize) {
   const random = mulberry32(seed);
+  const map = mapSpecs[mapSize];
   const walls = [];
   let id = 1;
   const add = (x, z, destructible) => walls.push({ id: id++, x, z, health: destructible ? 100 : 99999, destructible });
 
-  for (let x = -12; x <= 12; x += 1.5) {
-    add(x, -8.7, false);
-    add(x, 8.7, false);
+  const edgeX = Math.floor((map.halfWidth - 0.75) / 1.5) * 1.5;
+  const edgeZ = Math.floor((map.halfDepth - 0.75) / 1.5) * 1.5;
+  for (let x = -edgeX; x <= edgeX; x += 1.5) {
+    add(x, -map.halfDepth, false);
+    add(x, map.halfDepth, false);
   }
-  for (let z = -7.5; z <= 7.5; z += 1.5) {
-    add(-12.75, z, false);
-    add(12.75, z, false);
+  for (let z = -edgeZ; z <= edgeZ; z += 1.5) {
+    add(-map.halfWidth, z, false);
+    add(map.halfWidth, z, false);
   }
 
   const occupied = new Set();
-  for (let attempt = 0; attempt < 24; attempt++) {
-    const x = Math.round((1.8 + random() * 7.8) / 1.5) * 1.5;
-    const z = Math.round((-6 + random() * 12) / 1.5) * 1.5;
-    if (Math.abs(z) < 2.1 && x > 7.5) continue;
+  const maxObstacleX = Math.max(3, map.halfWidth - 3.15);
+  const maxObstacleZ = Math.max(1.5, map.halfDepth - 2.7);
+  for (let attempt = 0; attempt < map.obstacleAttempts; attempt++) {
+    const x = Math.round((1.5 + random() * (maxObstacleX - 1.5)) / 1.5) * 1.5;
+    const z = Math.round((-maxObstacleZ + random() * maxObstacleZ * 2) / 1.5) * 1.5;
+    if (Math.abs(z) < 2.1 && x > map.halfWidth - 5.25) continue;
     // The central firing lane must never be permanently blocked by an indestructible cube.
     const destructible = Math.abs(z) < 1.1 || random() > 0.20;
     for (const mirroredX of [x, -x]) {
@@ -286,9 +339,48 @@ function generateLevel(seed) {
   return walls;
 }
 
+function updateBot(room, bot, nowSeconds) {
+  const target = room.players.find(player => !player.isBot && player.alive);
+  if (!target) {
+    bot.input = { ...bot.input, move: 0, turn: 0, fire: false };
+    return;
+  }
+
+  const dx = target.x - bot.x;
+  const dz = target.z - bot.z;
+  const distance = Math.hypot(dx, dz);
+  const desiredYaw = normalizeAngle(Math.atan2(dx, dz) * 180 / Math.PI);
+  const angle = shortestAngle(bot.yaw, desiredYaw);
+  let move = distance > 4.2 && Math.abs(angle) < 70 ? 1 : distance < 2.2 ? -0.55 : 0;
+  let turn = Math.abs(angle) > 3 ? Math.sign(angle) : 0;
+
+  if (nowSeconds < bot.ai.avoidUntil) {
+    turn = bot.ai.avoidDirection;
+    move = 0.7;
+  } else if (move > 0) {
+    const probeYaw = normalizeAngle(bot.yaw + turn * 12);
+    const radians = probeYaw * Math.PI / 180;
+    const probeX = bot.x + Math.sin(radians) * 0.8;
+    const probeZ = bot.z + Math.cos(radians) * 0.8;
+    if (!canTankOccupy(room, bot, probeX, probeZ)) {
+      bot.ai.avoidDirection *= -1;
+      bot.ai.avoidUntil = nowSeconds + 0.85;
+      turn = bot.ai.avoidDirection;
+      move = 0.55;
+    }
+  }
+
+  bot.input = {
+    sequence: bot.input.sequence + 1,
+    move,
+    turn,
+    fire: Math.abs(angle) < 9
+  };
+}
+
 function broadcastSnapshot(room) {
   const message = {
-    type: 'snapshot', phase: room.phase, matchId: room.matchId,
+    type: 'snapshot', phase: room.phase, matchId: room.matchId, mapSize: room.mapSize,
     winner: room.winner, scoreA: room.score[0], scoreB: room.score[1], round: room.round,
     players: room.players.map(player => ({
       id: player.id, name: player.name, tankType: player.tankType,
@@ -299,10 +391,12 @@ function broadcastSnapshot(room) {
       id: bullet.id, owner: bullet.owner, x: round(bullet.x), z: round(bullet.z),
       yaw: round(bullet.yaw), speed: bullet.speed
     })),
-    walls: publicWalls(room.walls),
+    walls: room.wallsDirty ? publicWalls(room.walls) : null,
     statistics: room.phase === 'finished' ? room.players.map(player => ({ ...player.stats, meters: round(player.stats.meters) })) : []
   };
-  for (const player of room.players) send(player.socket, message);
+  for (const player of room.players)
+    if (player.socket) send(player.socket, message);
+  room.wallsDirty = false;
 }
 
 function removeSocket(socket) {
@@ -312,11 +406,11 @@ function removeSocket(socket) {
   if (!room) return;
   rooms.delete(code);
   for (const player of room.players) {
-    if (player.socket !== socket && player.socket.readyState === WebSocket.OPEN) {
+    if (player.socket && player.socket !== socket && player.socket.readyState === WebSocket.OPEN) {
       sendError(player.socket, 'Второй игрок отключился');
       player.socket.close(1000, 'opponent left');
     }
-    player.socket.meta.room = null;
+    if (player.socket) player.socket.meta.room = null;
   }
 }
 
@@ -326,7 +420,10 @@ function send(socket, value) {
 function sendError(socket, error) { send(socket, { type: 'error', error }); }
 function closeWithError(socket, error) { sendError(socket, error); socket.close(1008, error); }
 function publicWalls(walls) { return walls.map(({ id, x, z, health, destructible }) => ({ id, x, z, health, destructible })); }
-function spawnFor(id) { return id === 0 ? { x: -9.6, z: 0, yaw: 90 } : { x: 9.6, z: 0, yaw: 270 }; }
+function spawnFor(id, mapSize) {
+  const x = mapSpecs[mapSize].halfWidth - 3.15;
+  return id === 0 ? { x: -x, z: 0, yaw: 90 } : { x, z: 0, yaw: 270 };
+}
 function pointInWall(x, z, wall) { return Math.abs(x - wall.x) <= 0.72 && Math.abs(z - wall.z) <= 0.72; }
 function circleIntersectsBox(cx, cz, radius, bx, bz, half) {
   const nearestX = Math.max(bx - half, Math.min(cx, bx + half));
@@ -335,6 +432,7 @@ function circleIntersectsBox(cx, cz, radius, bx, bz, half) {
 }
 function squaredDistance(ax, az, bx, bz) { return (ax - bx) ** 2 + (az - bz) ** 2; }
 function normalizeAngle(value) { return ((value % 360) + 360) % 360; }
+function shortestAngle(from, to) { return ((to - from + 540) % 360) - 180; }
 function round(value) { return Math.round(value * 1000) / 1000; }
 function clampNumber(value, min, max, fallback) {
   const number = Number(value);
