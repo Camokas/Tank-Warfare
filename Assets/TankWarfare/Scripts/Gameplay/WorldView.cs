@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using InvalidOperationException = System.InvalidOperationException;
 using TankWarfare.Network;
 using UnityEngine;
 
@@ -13,8 +14,10 @@ namespace TankWarfare.Gameplay
 
         public WorldView()
         {
-            root = new GameObject("GeneratedCubeLevel").transform;
-            BuildFloor();
+            GameObject dynamicRoot = GameObject.Find("DynamicLevel");
+            if (dynamicRoot == null)
+                throw new InvalidOperationException("На сцене отсутствует объект DynamicLevel.");
+            root = dynamicRoot.transform;
         }
 
         public void BuildWalls(WallSnapshot[] snapshots)
@@ -123,27 +126,5 @@ namespace TankWarfare.Gameplay
             return material;
         }
 
-        private void BuildFloor()
-        {
-            const int width = 18;
-            const int height = 12;
-            for (int z = -height / 2; z < height / 2; z++)
-            {
-                for (int x = -width / 2; x < width / 2; x++)
-                {
-                    GameObject tile = GameObject.CreatePrimitive(PrimitiveType.Cube);
-                    tile.name = "FloorTile";
-                    tile.transform.SetParent(root);
-                    tile.transform.position = new Vector3(x * 1.4f + 0.7f, -0.2f, z * 1.4f + 0.7f);
-                    tile.transform.localScale = new Vector3(1.38f, 0.35f, 1.38f);
-                    Color color = (x + z & 1) == 0
-                        ? new Color(0.17f, 0.22f, 0.18f)
-                        : new Color(0.19f, 0.25f, 0.20f);
-                    tile.GetComponent<Renderer>().material = CreateMaterial(color);
-                    Collider collider = tile.GetComponent<Collider>();
-                    if (collider != null) Object.Destroy(collider);
-                }
-            }
-        }
     }
 }

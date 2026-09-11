@@ -5,9 +5,7 @@
   "description": "Authoritative WebSocket match server for Tank Warfare",
   "type": "module",
   "scripts": {
-    "start": "node src/server.js",
-    "check": "node --check src/server.js",
-    "smoke": "node src/smoke-test.js"
+    "start": "node src/server.js"
   },
   "engines": {
     "node": ">=20"

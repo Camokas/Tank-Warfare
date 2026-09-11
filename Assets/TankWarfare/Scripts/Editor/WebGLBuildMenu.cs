@@ -13,6 +13,8 @@ namespace TankWarfare.Editor
         {
             const string output = "Builds/WebGL";
             Directory.CreateDirectory(output);
+            PlayerSettings.WebGL.compressionFormat = WebGLCompressionFormat.Disabled;
+            PlayerSettings.WebGL.decompressionFallback = true;
             var options = new BuildPlayerOptions
             {
                 scenes = new[] { "Assets/Scenes/SampleScene.unity" },
