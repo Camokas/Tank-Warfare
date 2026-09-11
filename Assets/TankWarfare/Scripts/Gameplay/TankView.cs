@@ -18,6 +18,7 @@ namespace TankWarfare.Gameplay
 
         private Animator animator;
         private Transform turret;
+        private Transform barrel;
         private Renderer[] renderers;
         private Vector3 targetPosition;
         private Quaternion targetRotation;
@@ -27,9 +28,19 @@ namespace TankWarfare.Gameplay
 
         public int PlayerId { get; private set; }
         public float HealthRatio => Mathf.Clamp01(previousHealth / Mathf.Max(1f, maxHealth));
-        public Vector3 MuzzlePosition => turret != null
-            ? turret.position + turret.forward * 1.35f + Vector3.up * 0.05f
-            : transform.position + transform.forward;
+        public Vector3 MuzzlePosition
+        {
+            get
+            {
+                if (barrel != null)
+                    return barrel.position + barrel.forward * (barrel.lossyScale.z * 0.5f + 0.12f);
+                if (turret != null)
+                    return turret.position + turret.forward * 1.65f;
+                return transform.position + transform.forward * 1.65f + Vector3.up * 0.65f;
+            }
+        }
+
+        public float MuzzleYaw => turret != null ? turret.eulerAngles.y : transform.eulerAngles.y;
 
         public static TankView Create(int playerId, TankType type)
         {
@@ -64,6 +75,7 @@ namespace TankWarfare.Gameplay
             PlayerId = playerId;
             animator = GetComponent<Animator>();
             turret = transform.Find("Turret");
+            barrel = turret != null ? turret.Find("Barrel") : null;
             renderers = GetComponentsInChildren<Renderer>();
             targetPosition = transform.position;
             targetRotation = transform.rotation;

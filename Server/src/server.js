@@ -3,9 +3,10 @@ import http from 'node:http';
 import { WebSocketServer, WebSocket } from 'ws';
 
 const PORT = Number(process.env.PORT || 8080);
-const TICK_RATE = 30;
-const SNAPSHOT_RATE = 15;
+const TICK_RATE = 60;
+const SNAPSHOT_RATE = 20;
 const MAX_MESSAGE_BYTES = 4096;
+const BULLET_MUZZLE_OFFSET = 1.65;
 const ROOM_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
   .split(',').map(value => value.trim()).filter(Boolean);
@@ -176,8 +177,8 @@ function simulateRoom(room, delta, nowSeconds) {
       player.stats.shots++;
       room.bullets.push({
         id: nextBulletId++, owner: player.id,
-        x: player.x + Math.sin(radians) * 1.25,
-        z: player.z + Math.cos(radians) * 1.25,
+        x: player.x + Math.sin(radians) * BULLET_MUZZLE_OFFSET,
+        z: player.z + Math.cos(radians) * BULLET_MUZZLE_OFFSET,
         yaw: player.yaw, damage: spec.damage, speed: spec.bullet, life: 3
       });
     }
@@ -295,7 +296,8 @@ function broadcastSnapshot(room) {
       health: player.health, maxHealth: tankSpecs[player.tankType].health, alive: player.alive
     })),
     bullets: room.bullets.map(bullet => ({
-      id: bullet.id, owner: bullet.owner, x: round(bullet.x), z: round(bullet.z), yaw: round(bullet.yaw)
+      id: bullet.id, owner: bullet.owner, x: round(bullet.x), z: round(bullet.z),
+      yaw: round(bullet.yaw), speed: bullet.speed
     })),
     walls: publicWalls(room.walls),
     statistics: room.phase === 'finished' ? room.players.map(player => ({ ...player.stats, meters: round(player.stats.meters) })) : []

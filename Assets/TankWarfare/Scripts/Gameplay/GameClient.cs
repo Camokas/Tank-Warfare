@@ -28,6 +28,8 @@ namespace TankWarfare.Gameplay
         private int localPlayerId = -1;
         private TankType selectedTank = TankType.Medium;
         private float nextInputTime;
+        private float nextPredictedShotTime;
+        private bool fireQueued;
         private int inputSequence;
 
         private void Awake()
@@ -85,26 +87,41 @@ namespace TankWarfare.Gameplay
 
         private void Update()
         {
-            if (screen != ScreenState.Playing || !transport.IsOpen || Time.unscaledTime < nextInputTime) return;
+            if (screen != ScreenState.Playing || !transport.IsOpen) return;
+
+            Keyboard keyboard = Keyboard.current;
+            bool fireHeld = keyboard != null && keyboard.spaceKey.isPressed;
+            fireQueued |= keyboard != null && keyboard.spaceKey.wasPressedThisFrame;
+            bool fireRequested = fireHeld || fireQueued;
+
+            if (fireRequested && Time.unscaledTime >= nextPredictedShotTime &&
+                tanks.TryGetValue(localPlayerId, out TankView firingTank))
+            {
+                TankSpec spec = TankCatalog.Get(selectedTank);
+                world.PredictLocalShot(firingTank.MuzzlePosition, firingTank.MuzzleYaw, spec.BulletSpeed);
+                firingTank.PlayFire();
+                nextPredictedShotTime = Time.unscaledTime + spec.ReloadSeconds;
+            }
+
+            if (Time.unscaledTime < nextInputTime) return;
 
             nextInputTime = Time.unscaledTime + InputInterval;
-            Keyboard keyboard = Keyboard.current;
             float move = 0f;
             float turn = 0f;
-            bool fire = false;
             if (keyboard != null)
             {
                 if (keyboard.upArrowKey.isPressed) move += 1f;
                 if (keyboard.downArrowKey.isPressed) move -= 1f;
                 if (keyboard.leftArrowKey.isPressed) turn -= 1f;
                 if (keyboard.rightArrowKey.isPressed) turn += 1f;
-                fire = keyboard.spaceKey.isPressed;
             }
 
             transport.Send(JsonUtility.ToJson(new NetworkMessage
             {
-                type = "input", sequence = ++inputSequence, move = move, turn = turn, fire = fire
+                type = "input", sequence = ++inputSequence, move = move, turn = turn,
+                fire = fireRequested
             }));
+            fireQueued = false;
             if (tanks.TryGetValue(localPlayerId, out TankView localTank)) localTank.SetMovement(move);
         }
 
@@ -213,9 +230,9 @@ namespace TankWarfare.Gameplay
             }
 
             world.ApplyWalls(message.walls);
-            HashSet<int> firedBy = world.ApplyBullets(message.bullets);
+            HashSet<int> firedBy = world.ApplyBullets(message.bullets, localPlayerId);
             foreach (int playerId in firedBy)
-                if (tanks.TryGetValue(playerId, out TankView tank)) tank.PlayFire();
+                if (playerId != localPlayerId && tanks.TryGetValue(playerId, out TankView tank)) tank.PlayFire();
 
             RefreshHud();
             if (message.phase == "waiting") { ShowScreen(ScreenState.Lobby); return; }
@@ -307,6 +324,8 @@ namespace TankWarfare.Gameplay
             localMatch = null;
             localPlayerId = -1;
             pendingOperation = string.Empty;
+            fireQueued = false;
+            nextPredictedShotTime = 0f;
             SetMenuStatus(string.Empty);
             ShowScreen(ScreenState.Menu);
         }

@@ -9,8 +9,10 @@ namespace TankWarfare.Gameplay
     {
         private readonly Transform root;
         private readonly Dictionary<int, GameObject> walls = new Dictionary<int, GameObject>();
-        private readonly Dictionary<int, GameObject> bullets = new Dictionary<int, GameObject>();
+        private readonly Dictionary<int, BulletView> bullets = new Dictionary<int, BulletView>();
+        private readonly Queue<BulletView> predictedBullets = new Queue<BulletView>();
         private readonly HashSet<int> liveBulletIds = new HashSet<int>();
+        private readonly Material bulletMaterial;
 
         public WorldView()
         {
@@ -18,6 +20,7 @@ namespace TankWarfare.Gameplay
             if (dynamicRoot == null)
                 throw new InvalidOperationException("На сцене отсутствует объект DynamicLevel.");
             root = dynamicRoot.transform;
+            bulletMaterial = CreateMaterial(new Color(1f, 0.72f, 0.16f), true);
         }
 
         public void BuildWalls(WallSnapshot[] snapshots)
@@ -65,41 +68,49 @@ namespace TankWarfare.Gameplay
             }
         }
 
-        public HashSet<int> ApplyBullets(BulletSnapshot[] snapshots)
+        public void PredictLocalShot(Vector3 muzzlePosition, float yaw, float speed)
+        {
+            BulletView bullet = CreateBullet("PredictedBullet");
+            bullet.Initialize(muzzlePosition, yaw, speed, true);
+            predictedBullets.Enqueue(bullet);
+        }
+
+        public HashSet<int> ApplyBullets(BulletSnapshot[] snapshots, int localPlayerId)
         {
             liveBulletIds.Clear();
             var newlyCreatedOwners = new HashSet<int>();
+            DiscardExpiredPredictions();
 
             if (snapshots != null)
             {
                 foreach (BulletSnapshot snapshot in snapshots)
                 {
                     liveBulletIds.Add(snapshot.id);
-                    if (!bullets.TryGetValue(snapshot.id, out GameObject bullet))
+                    if (!bullets.TryGetValue(snapshot.id, out BulletView bullet))
                     {
-                        bullet = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-                        bullet.name = $"Bullet_{snapshot.id}";
-                        bullet.transform.SetParent(root);
-                        bullet.transform.localScale = Vector3.one * 0.28f;
-                        bullet.GetComponent<Renderer>().material = CreateMaterial(new Color(1f, 0.72f, 0.16f), true);
-                        Collider collider = bullet.GetComponent<Collider>();
-                        if (collider != null) Object.Destroy(collider);
+                        bullet = snapshot.owner == localPlayerId ? TakePrediction() : null;
+                        if (bullet == null)
+                        {
+                            bullet = CreateBullet($"Bullet_{snapshot.id}");
+                            bullet.Initialize(new Vector3(snapshot.x, 0.82f, snapshot.z),
+                                snapshot.yaw, snapshot.speed, false);
+                        }
+                        else bullet.name = $"Bullet_{snapshot.id}";
+
                         bullets[snapshot.id] = bullet;
                         newlyCreatedOwners.Add(snapshot.owner);
                     }
 
-                    Vector3 target = new Vector3(snapshot.x, 0.58f, snapshot.z);
-                    bullet.transform.position = Vector3.Lerp(bullet.transform.position, target, 0.72f);
-                    bullet.transform.rotation = Quaternion.Euler(0f, snapshot.yaw, 0f);
+                    bullet.Confirm(snapshot);
                 }
             }
 
             var expired = new List<int>();
-            foreach (KeyValuePair<int, GameObject> pair in bullets)
+            foreach (KeyValuePair<int, BulletView> pair in bullets)
                 if (!liveBulletIds.Contains(pair.Key)) expired.Add(pair.Key);
             foreach (int id in expired)
             {
-                Object.Destroy(bullets[id]);
+                if (bullets[id] != null) Object.Destroy(bullets[id].gameObject);
                 bullets.Remove(id);
             }
 
@@ -108,8 +119,59 @@ namespace TankWarfare.Gameplay
 
         public void ClearDynamic()
         {
-            foreach (GameObject bullet in bullets.Values) Object.Destroy(bullet);
+            foreach (BulletView bullet in bullets.Values)
+                if (bullet != null) Object.Destroy(bullet.gameObject);
             bullets.Clear();
+
+            while (predictedBullets.Count > 0)
+            {
+                BulletView bullet = predictedBullets.Dequeue();
+                if (bullet != null) Object.Destroy(bullet.gameObject);
+            }
+        }
+
+        private BulletView CreateBullet(string objectName)
+        {
+            GameObject bulletObject = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            bulletObject.name = objectName;
+            bulletObject.transform.SetParent(root);
+            bulletObject.transform.localScale = new Vector3(0.24f, 0.24f, 0.42f);
+            bulletObject.GetComponent<Renderer>().sharedMaterial = bulletMaterial;
+
+            TrailRenderer trail = bulletObject.AddComponent<TrailRenderer>();
+            trail.time = 0.12f;
+            trail.minVertexDistance = 0.03f;
+            trail.startWidth = 0.12f;
+            trail.endWidth = 0f;
+            trail.sharedMaterial = bulletMaterial;
+            trail.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            trail.receiveShadows = false;
+
+            Collider collider = bulletObject.GetComponent<Collider>();
+            if (collider != null) Object.Destroy(collider);
+            return bulletObject.AddComponent<BulletView>();
+        }
+
+        private BulletView TakePrediction()
+        {
+            while (predictedBullets.Count > 0)
+            {
+                BulletView bullet = predictedBullets.Dequeue();
+                if (bullet != null && !bullet.IsExpiredPrediction) return bullet;
+                if (bullet != null) Object.Destroy(bullet.gameObject);
+            }
+            return null;
+        }
+
+        private void DiscardExpiredPredictions()
+        {
+            while (predictedBullets.Count > 0)
+            {
+                BulletView bullet = predictedBullets.Peek();
+                if (bullet != null && !bullet.IsExpiredPrediction) break;
+                predictedBullets.Dequeue();
+                if (bullet != null) Object.Destroy(bullet.gameObject);
+            }
         }
 
         public static Material CreateMaterial(Color color, bool emission = false)
