@@ -51,6 +51,7 @@ namespace TankWarfare.Network
         public float x;
         public float z;
         public float yaw;
+        public float speed;
     }
 
     [Serializable]
