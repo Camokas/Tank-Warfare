@@ -5,6 +5,8 @@ namespace TankWarfare.Gameplay
 {
     public sealed class GameUi : MonoBehaviour
     {
+        private const string FontResourcePath = "Fonts/Roboto-Regular";
+
         public GameObject menuPanel;
         public GameObject connectionPanel;
         public GameObject lobbyPanel;
@@ -45,5 +47,18 @@ namespace TankWarfare.Gameplay
 
         public Text statisticsBodyText;
         public Button statisticsBackButton;
+
+        private void Awake()
+        {
+            Font font = Resources.Load<Font>(FontResourcePath);
+            if (font == null)
+            {
+                Debug.LogError($"Не найден UI-шрифт Resources/{FontResourcePath}.");
+                return;
+            }
+
+            foreach (Text label in GetComponentsInChildren<Text>(true))
+                label.font = font;
+        }
     }
 }

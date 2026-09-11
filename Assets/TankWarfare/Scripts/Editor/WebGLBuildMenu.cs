@@ -20,7 +20,7 @@ namespace TankWarfare.Editor
                 scenes = new[] { "Assets/Scenes/SampleScene.unity" },
                 locationPathName = output,
                 target = BuildTarget.WebGL,
-                options = BuildOptions.CleanBuildCache
+                options = BuildOptions.None
             };
 
             BuildReport report = BuildPipeline.BuildPlayer(options);
